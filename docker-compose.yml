@@ -56,7 +56,7 @@ services:
       - frontnet
       - backnet
     ports:
-      - "5433:5432"
+      - "5434:5432"
     entrypoint: ["sh"]
     command: ["/command-standby.sh"]
     healthcheck:
@@ -67,9 +67,9 @@ services:
       start_period: 10s
     depends_on:
       - primary
-  user:
+  notification:
     image: python:latest
-    container_name: user_service
+    container_name: notification_service
     env_file:
       - config/secrets/environments/.env.dev
     volumes:
@@ -84,7 +84,7 @@ services:
       - frontnet
       - backnet
     ports:
-      - "8000:8000"
+      - "8001:8000"
     working_dir: /app
     entrypoint: ["sh"]
     command: ["/app/scripts/command-user.sh"]
@@ -109,9 +109,9 @@ networks:
     internal: true
     ipam:
       config:
-        - subnet: 172.25.0.0/16
+        - subnet: 172.25.1.0/24
   frontnet:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.26.0.0/16
+        - subnet: 172.25.2.0/24

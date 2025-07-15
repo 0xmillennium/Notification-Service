@@ -1,8 +1,9 @@
-from typing import  List
+from typing import  List, Dict, Any
 from datetime import datetime
 import time
 from pydantic.dataclasses import dataclass
 from src.adapters.message_broker.connection_manager import AbstractConnectionManager, ConnectionMetrics, HealthMetrics
+from src.domain.model import PreferenceSettings
 
 
 @dataclass
@@ -134,3 +135,42 @@ async def get_alerts(conn: AbstractConnectionManager) -> AlertsResponse:
         warning_alerts=warning_alerts,
         info_alerts=info_alerts
     )
+
+
+async def get_notification_preferences(userid: str, uow) -> PreferenceSettings:
+    """
+    Retrieve notification preferences for a user.
+    """
+    with uow:
+        preferences = uow.notification_preferences.get(userid)
+        return preferences.preferences
+
+
+async def get_notification_history(userid: str, limit: int, uow) -> List[Dict[str, Any]]:
+    """
+    Retrieve notification history for a user.
+
+    Args:
+        userid: The user ID to get history for
+        limit: Maximum number of notifications to return
+        uow: Unit of work instance
+
+    Returns:
+        List of dictionaries containing notification details
+    """
+    with uow:
+        notifications = uow.notification_requests.get_notification_history(userid, limit)
+        return [
+            {
+                "notification_id": n.notification_id.value,
+                "notification_type": n.notification_type,
+                "recipient_email": n.recipient_email.value,
+                "subject": n.subject,
+                "content": n.content,
+                "template_vars": n.template_vars,
+                "status": n.status,
+                "retry_count": n.retry_count,
+                "created_at": n.created_at.isoformat() if n.created_at else None
+            }
+            for n in notifications
+        ]

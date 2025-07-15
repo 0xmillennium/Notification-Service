@@ -25,13 +25,14 @@ async def lifespan(_app: FastAPI):
     from sqlalchemy.orm import sessionmaker
     from src.service_layer import unit_of_work
     from src.adapters.message_broker import connection_manager, publisher, subscriber
+    from src.adapters.email_provider import create_email_provider
 
     logger.info("Application starting up...")
 
     orm.init_orm_mappers()
 
-    primary_engine = create_engine(config.get_primary_url(), echo=True)
-    standby_engine = create_engine(config.get_standby_url(), echo=True)
+    primary_engine = create_engine(config.get_primary_url(), echo=False)
+    standby_engine = create_engine(config.get_standby_url(), echo=False)
     primary_session_factory = sessionmaker(bind=primary_engine)
     standby_session_factory = sessionmaker(bind=standby_engine)
 
@@ -41,10 +42,12 @@ async def lifespan(_app: FastAPI):
     suow = unit_of_work.SqlAlchemyUnitOfWork(standby_session_factory)
     conn = connection_manager.RabbitMQConnectionManager(connection_url=config.get_rabbitmq_url())
     pub = publisher.EventPublisher(connection_manager=conn)
-    mbus = bootstrap.bootstrap(puow=puow, suow=suow, conn=conn, pub=pub)
+    ntfy = create_email_provider()
+    mbus = bootstrap.bootstrap(puow=puow, pub=pub, ntfy=ntfy)
     sub = subscriber.EventSubscriber(connection_manager=conn, messagebus=mbus)
     _app.state.messagebus = mbus
-    _app.state.connection_manager = conn
+    _app.state.conn = conn
+    _app.state.suow = suow
     consume_task = asyncio.create_task(sub.start_consuming())
 
 
@@ -73,13 +76,13 @@ def create_app():
     Returns:
         FastAPI: The configured FastAPI application.
     """
-    from src.entrypoints import user_app, broker_app
+    from src.entrypoints import broker_app, notification_app
     from src.core.exceptions.exception_handlers import EXCEPTION_HANDLERS
     from src.core.correlation.middleware import CorrelationIdMiddleware
 
     _app = FastAPI(
-        title="Chandland API",
-        description="Fastest way to interact with a blockchain.",
+        title="Notification Service API",
+        description="Microservice for handling email notifications and user preferences.",
         version="1.0.0",
         docs_url="/documentation",
         redoc_url="/api-reference",
@@ -92,8 +95,8 @@ def create_app():
     for exception_class, handler in EXCEPTION_HANDLERS.items():
         _app.add_exception_handler(exception_class, handler)
 
-    _app.include_router(user_app.router)
     _app.include_router(broker_app.router)
+    _app.include_router(notification_app.router)
 
     return _app
 

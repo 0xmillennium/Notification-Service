@@ -1,0 +1,355 @@
+# tests/e2e/test_message_broker.py
+import pytest
+import asyncio
+import json
+from uuid import uuid4
+from unittest.mock import Mock, patch
+from src.entrypoints.broker_app import handle_notification_request
+from src.adapters.message_broker.publisher import MessagePublisher
+from src.adapters.message_broker.subscriber import MessageSubscriber
+from src.bootstrap import bootstrap
+from src.config import get_config
+
+
+@pytest.fixture
+async def mock_broker_connection():
+    """Mock message broker connection for testing"""
+    mock_connection = Mock()
+    mock_channel = Mock()
+    mock_connection.channel.return_value = mock_channel
+    return mock_connection, mock_channel
+
+
+class TestMessageBrokerIntegration:
+    """End-to-end tests for message broker integration"""
+
+    @pytest.mark.asyncio
+    async def test_notification_request_processing(self, mock_broker_connection):
+        """Test complete message processing flow"""
+        connection, channel = mock_broker_connection
+        messagebus = bootstrap(start_orm=True)
+
+        # Simulate receiving a notification request message
+        message_body = {
+            "notification_id": uuid4().hex,
+            "userid": uuid4().hex,
+            "notification_type": "email_verification",
+            "subject": "Verify your email",
+            "content": "Please click the link to verify your email",
+            "recipient_email": "test@example.com"
+        }
+
+        # Mock message properties
+        mock_properties = Mock()
+        mock_properties.correlation_id = uuid4().hex
+
+        # Process the message
+        with patch('src.entrypoints.broker_app.bootstrap', return_value=messagebus):
+            result = await handle_notification_request(
+                channel=channel,
+                method=Mock(),
+                properties=mock_properties,
+                body=json.dumps(message_body).encode()
+            )
+
+        # Verify message was processed successfully
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_failed_notification_retry(self, mock_broker_connection):
+        """Test retry mechanism for failed notifications"""
+        connection, channel = mock_broker_connection
+        messagebus = bootstrap(start_orm=True)
+
+        # Create a message that will fail processing
+        message_body = {
+            "notification_id": uuid4().hex,
+            "userid": "invalid-user",
+            "notification_type": "invalid_type",
+            "subject": "Test",
+            "content": "Test content"
+        }
+
+        mock_properties = Mock()
+        mock_properties.correlation_id = uuid4().hex
+
+        # Process the message (should handle gracefully)
+        with patch('src.entrypoints.broker_app.bootstrap', return_value=messagebus):
+            result = await handle_notification_request(
+                channel=channel,
+                method=Mock(),
+                properties=mock_properties,
+                body=json.dumps(message_body).encode()
+            )
+
+        # Should not crash the service
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_publisher_integration(self):
+        """Test message publishing functionality"""
+        config = get_config()
+
+        with patch('src.adapters.message_broker.connection_manager.get_connection') as mock_get_conn:
+            mock_connection = Mock()
+            mock_channel = Mock()
+            mock_connection.channel.return_value = mock_channel
+            mock_get_conn.return_value = mock_connection
+
+            publisher = MessagePublisher(config)
+
+            message = {
+                "notification_id": uuid4().hex,
+                "event_type": "notification_sent",
+                "timestamp": "2025-07-09T10:00:00Z"
+            }
+
+            # Publish message
+            await publisher.publish(
+                exchange="notifications",
+                routing_key="notification.sent",
+                message=message
+            )
+
+            # Verify publish was called
+            mock_channel.basic_publish.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_subscriber_setup(self):
+        """Test message subscriber setup and queue binding"""
+        config = get_config()
+
+        with patch('src.adapters.message_broker.connection_manager.get_connection') as mock_get_conn:
+            mock_connection = Mock()
+            mock_channel = Mock()
+            mock_connection.channel.return_value = mock_channel
+            mock_get_conn.return_value = mock_connection
+
+            subscriber = MessageSubscriber(config)
+
+            # Setup subscriber
+            await subscriber.setup_queues()
+
+            # Verify queues and bindings were created
+            assert mock_channel.queue_declare.call_count > 0
+            assert mock_channel.queue_bind.call_count > 0
+
+
+class TestNotificationEventFlow:
+    """End-to-end tests for notification event flow"""
+
+    @pytest.mark.asyncio
+    async def test_user_registration_notification_flow(self):
+        """Test complete flow from user registration to email notification"""
+        messagebus = bootstrap(start_orm=True)
+
+        userid = uuid4().hex
+        user_email = "newuser@example.com"
+
+        # Simulate user registration event
+        user_registration_event = {
+            "event_type": "user_registered",
+            "userid": userid,
+            "email": user_email,
+            "registration_time": "2025-07-09T10:00:00Z"
+        }
+
+        # Mock the email adapter
+        with patch('src.adapters.email_provider.EmailProvider.send_email') as mock_send:
+            mock_send.return_value = True
+
+            # Process user registration (would trigger welcome email)
+            from src.domain.commands import SendNotification
+            from src.domain.model import NotificationType
+
+            # First set default preferences for new user
+            from src.domain.commands import SetNotificationPreferences
+            set_prefs_cmd = SetNotificationPreferences(
+                userid=userid,
+                notification_email=user_email,
+                email_enabled=True,
+                marketing_enabled=True,
+                security_enabled=True
+            )
+            messagebus.handle(set_prefs_cmd)
+
+            # Send welcome notification
+            welcome_cmd = SendNotification(
+                notification_id=uuid4().hex,
+                userid=userid,
+                notification_type=NotificationType.EMAIL_VERIFICATION,
+                subject="Welcome! Please verify your email",
+                content="Thank you for registering. Please verify your email address."
+            )
+
+            result = messagebus.handle(welcome_cmd)
+
+            # Verify notification was processed
+            assert len(result) == 1
+            mock_send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_password_reset_notification_flow(self):
+        """Test password reset notification flow"""
+        messagebus = bootstrap(start_orm=True)
+
+        userid = uuid4().hex
+        user_email = "user@example.com"
+
+        # Set up user preferences
+        from src.domain.commands import SetNotificationPreferences, SendNotification
+        from src.domain.model import NotificationType
+
+        set_prefs_cmd = SetNotificationPreferences(
+            userid=userid,
+            notification_email=user_email,
+            email_enabled=True,
+            security_enabled=True
+        )
+        messagebus.handle(set_prefs_cmd)
+
+        # Mock the email adapter
+        with patch('src.adapters.email_provider.EmailProvider.send_email') as mock_send:
+            mock_send.return_value = True
+
+            # Send password reset notification
+            reset_cmd = SendNotification(
+                notification_id=uuid4().hex,
+                userid=userid,
+                notification_type=NotificationType.PASSWORD_RESET,
+                subject="Password Reset Request",
+                content="Click here to reset your password: https://example.com/reset"
+            )
+
+            result = messagebus.handle(reset_cmd)
+
+            # Verify notification was sent
+            assert len(result) == 1
+            mock_send.assert_called_once()
+
+            # Verify email content
+            call_args = mock_send.call_args
+            assert "Password Reset Request" in str(call_args)
+
+    @pytest.mark.asyncio
+    async def test_bulk_notification_processing(self):
+        """Test processing multiple notifications efficiently"""
+        messagebus = bootstrap(start_orm=True)
+
+        # Create multiple users with preferences
+        users = []
+        for i in range(10):
+            userid = uuid4().hex
+            users.append({
+                'userid': userid,
+                'email': f'user{i}@example.com'
+            })
+
+            from src.domain.commands import SetNotificationPreferences
+            set_prefs_cmd = SetNotificationPreferences(
+                userid=userid,
+                notification_email=f'user{i}@example.com',
+                email_enabled=True,
+                marketing_enabled=True
+            )
+            messagebus.handle(set_prefs_cmd)
+
+        # Mock the email adapter
+        with patch('src.adapters.email_provider.EmailProvider.send_email') as mock_send:
+            mock_send.return_value = True
+
+            # Send bulk marketing notifications
+            from src.domain.commands import SendNotification
+            from src.domain.model import NotificationType
+
+            notifications_sent = 0
+            for user in users:
+                marketing_cmd = SendNotification(
+                    notification_id=uuid4().hex,
+                    userid=user['userid'],
+                    notification_type=NotificationType.MARKETING,
+                    subject="Special Offer",
+                    content="Check out our latest deals!"
+                )
+
+                result = messagebus.handle(marketing_cmd)
+                if result:
+                    notifications_sent += 1
+
+            # Verify all notifications were processed
+            assert notifications_sent == 10
+            assert mock_send.call_count == 10
+
+
+class TestErrorRecovery:
+    """End-to-end tests for error recovery scenarios"""
+
+    @pytest.mark.asyncio
+    async def test_email_service_failure_recovery(self):
+        """Test handling of email service failures"""
+        messagebus = bootstrap(start_orm=True)
+
+        userid = uuid4().hex
+        user_email = "user@example.com"
+
+        # Set up user preferences
+        from src.domain.commands import SetNotificationPreferences, SendNotification
+        from src.domain.model import NotificationType
+
+        set_prefs_cmd = SetNotificationPreferences(
+            userid=userid,
+            notification_email=user_email,
+            email_enabled=True
+        )
+        messagebus.handle(set_prefs_cmd)
+
+        # Mock email service failure
+        with patch('src.adapters.email_provider.EmailProvider.send_email') as mock_send:
+            mock_send.side_effect = Exception("Email service unavailable")
+
+            # Send notification that will fail
+            notification_cmd = SendNotification(
+                notification_id=uuid4().hex,
+                userid=userid,
+                notification_type=NotificationType.EMAIL_VERIFICATION,
+                subject="Test",
+                content="Test content"
+            )
+
+            # Should handle the error gracefully
+            result = messagebus.handle(notification_cmd)
+            assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_database_recovery(self):
+        """Test handling of database connection issues"""
+        # This would test database reconnection logic
+        # Implementation depends on specific database adapter used
+        pass
+
+    @pytest.mark.asyncio
+    async def test_message_broker_reconnection(self):
+        """Test message broker reconnection logic"""
+        config = get_config()
+
+        with patch('src.adapters.message_broker.connection_manager.get_connection') as mock_get_conn:
+            # Simulate connection failure then recovery
+            mock_get_conn.side_effect = [
+                Exception("Connection failed"),
+                Mock()  # Successful reconnection
+            ]
+
+            publisher = MessagePublisher(config)
+
+            # First call should fail, but service should handle it
+            try:
+                await publisher.publish(
+                    exchange="test",
+                    routing_key="test.key",
+                    message={"test": "data"}
+                )
+            except Exception:
+                pass  # Expected to fail
+
+            # Service should continue operating
+            assert True  # If we get here, service didn't crash

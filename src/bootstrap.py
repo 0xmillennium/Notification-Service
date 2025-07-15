@@ -1,13 +1,13 @@
 import inspect
 from src.service_layer import handlers, messagebus, unit_of_work
 from src.adapters.message_broker import connection_manager, publisher
+from src.adapters.email_provider import AbstractEmailProvider
 
 
 def bootstrap(
         puow: unit_of_work.AbstractUnitOfWork = None,
-        suow: unit_of_work.AbstractUnitOfWork = None,
-        conn: connection_manager.AbstractConnectionManager = None,
-        pub: publisher.AbstractEventPublisher = None
+        pub: publisher.AbstractEventPublisher = None,
+        ntfy: AbstractEmailProvider = None
 ) -> messagebus.MessageBus:
     """
         initializes and configures the message bus with dependency-injected handlers.
@@ -19,10 +19,6 @@ def bootstrap(
         Args:
             puow (unit_of_work.AbstractUnitOfWork, optional): The Unit of Work instance
                 for primary database operations. Defaults to None.
-            suow (unit_of_work.AbstractUnitOfWork, optional): The Unit of Work instance
-                for standby database operations. Defaults to None.
-            conn (connection_manager.AbstractConnectionManager, optional): The connection
-                manager for message broker interactions. Defaults to None.
             pub (publisher.AbstractEventPublisher, optional): The event publisher
                 for sending domain events. Defaults to None.
 
@@ -30,7 +26,7 @@ def bootstrap(
             messagebus.MessageBus: An initialized MessageBus instance ready to handle
                 commands and events.
         """
-    dependencies = {"puow": puow, "suow": suow, "conn":conn, "pub": pub}
+    dependencies = {"puow": puow, "pub": pub, "ntfy": ntfy}
     injected_event_handlers = {
         event_type: [
             inject_dependencies(handler, dependencies)

@@ -8,10 +8,11 @@ class AbstractUnitOfWork(abc.ABC):
     Abstract base class for a Unit of Work.
 
     Manages a business transaction, ensuring atomicity and providing a way
-    to collect domain events.
+    to collect domain events from notification aggregates.
     """
 
-    users: repository.AbstractRepository
+    notification_preferences: repository.AbstractNotificationPreferencesRepository
+    notification_requests: repository.AbstractNotificationRequestRepository
 
     def __enter__(self):
         """
@@ -33,11 +34,15 @@ class AbstractUnitOfWork(abc.ABC):
 
     def collect_new_events(self):
         """
-        Collects new domain events from tracked aggregates.
+        Collects new domain events from tracked notification aggregates.
         """
-        for user in self.users.seen:
-            while user.events:
-                yield user.events.pop(0)
+        for preferences in self.notification_preferences.seen:
+            while preferences.events:
+                yield preferences.events.pop(0)
+
+        for request in self.notification_requests.seen:
+            while request.events:
+                yield request.events.pop(0)
 
     @abc.abstractmethod
     def _commit(self):
@@ -58,7 +63,7 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
     """
     SQLAlchemy implementation of the Unit of Work.
 
-    Manages SQLAlchemy sessions and provides a concrete user repository.
+    Manages SQLAlchemy sessions and provides notification repositories.
     """
 
     def __init__(self, session_factory):
@@ -72,10 +77,11 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
 
     def __enter__(self):
         """
-        Enters the SQLAlchemy Unit of Work context, creating a session and repository.
+        Enters the SQLAlchemy Unit of Work context, creating a session and notification repositories.
         """
         self.session = self.session_factory()  # type: Session
-        self.users = repository.SqlAlchemyRepository(self.session)
+        self.notification_preferences = repository.SqlAlchemyNotificationPreferencesRepository(self.session)
+        self.notification_requests = repository.SqlAlchemyNotificationRequestRepository(self.session)
         return super().__enter__()
 
     def __exit__(self, *args):

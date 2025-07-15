@@ -1,144 +1,167 @@
 from abc import ABC, abstractmethod
-from typing import Set, Union, Callable
-from sqlalchemy.orm import Query, Session
-from src.domain.model import User, UserID, Username, Email
+from typing import Set, Union, Any
+from sqlalchemy.orm import Session
+from src.domain.model import UserID, NotificationPreferences, NotificationRequest, NotificationID
 
 
-def check_excluded_userid(func: Callable) -> Callable:
-    """
-    Decorator to modify a query for username/email uniqueness checks.
-
-    It adds a filter to exclude a specific user ID, useful for update scenarios.
-    """
-    def wrapper(self, value: Union[Username, str], exclude_userid: Union[UserID, str] = None) -> bool:
-        query = func(self, value, exclude_userid)
-        if exclude_userid:
-            exclude_userid = exclude_userid if isinstance(exclude_userid, UserID) else UserID(exclude_userid)
-            query = query.filter(User.userid != exclude_userid)
-        return self.session.query(query.exists()).scalar()
-    return wrapper
-
-
-class AbstractRepository(ABC):
-    """
-    Abstract base class for a repository.
-
-    Defines the interface for interacting with user data and tracks
-    'seen' entities for Unit of a Work event collection.
-    """
+class AbstractNotificationPreferencesRepository(ABC):
+    """Abstract repository for notification preferences."""
 
     def __init__(self):
-        self.seen = set()  # type: Set[User]
+        self.seen = set()  # type: Set[NotificationPreferences]
 
-    def add(self, user: User):
+    def add(self, preferences: NotificationPreferences):
         """
-        Adds a user to the repository and marks it as seen.
+        Adds notification preferences to the repository and marks it as seen.
         """
-        self._add(user)
-        self.seen.add(user)
+        self._add(preferences)
+        self.seen.add(preferences)
 
-    def get(self, user_id: Union[UserID, str]) -> User | None:
+    def get(self, userid: Union[UserID, str]) -> NotificationPreferences | None:
         """
-        Retrieves a user by their ID and marks it as seen if found.
+        Retrieves notification preferences by user ID and marks it as seen if found.
         """
-        user = self._get(user_id)
-        if user:
-            self.seen.add(user)
-        return user
-
-    def get_by_username(self, username: Union[Username, str]) -> User | None:
-        """
-        Retrieves a user by their username and marks it as seen if found.
-        """
-        user = self._get_by_username(username)
-        if user:
-            self.seen.add(user)
-        return user
+        preferences = self._get(userid)
+        if preferences:
+            self.seen.add(preferences)
+        return preferences
 
     @abstractmethod
-    def _add(self, user: User):
+    def _add(self, preferences: NotificationPreferences):
         """
-        Abstract method to add a user to the persistence layer.
+        Abstract method to add notification preferences to the persistence layer.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def _get(self, user_id: Union[UserID, str]) -> User | None:
+    def _get(self, userid: Union[UserID, str]) -> NotificationPreferences | None:
         """
-        Abstract method to retrieve a user by ID from the persistence layer.
+        Abstract method to retrieve notification preferences by user ID from the persistence layer.
+        """
+        raise NotImplementedError
+
+
+class AbstractNotificationRequestRepository(ABC):
+    """Abstract repository for notification requests."""
+
+    def __init__(self):
+        self.seen = set()  # type: Set[NotificationRequest]
+
+    def add(self, request: NotificationRequest):
+        """
+        Adds a notification request to the repository and marks it as seen.
+        """
+        self._add(request)
+        self.seen.add(request)
+
+    def get(self, notification_id: Union[NotificationID, str]) -> NotificationRequest | None:
+        """
+        Retrieves a notification request by its ID and marks it as seen if found.
+        """
+        request = self._get(notification_id)
+        if request:
+            self.seen.add(request)
+        return request
+
+    @abstractmethod
+    def _add(self, request: NotificationRequest):
+        """
+        Abstract method to add a notification request to the persistence layer.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def _get_by_username(self, username: Union[Username, str]) -> User | None:
+    def _get(self, notification_id: Union[NotificationID, str]) -> NotificationRequest | None:
         """
-        Abstract method to retrieve a user by username from the persistence layer.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def is_username_taken(self, username: Union[Username, str], exclude_user_id: Union[UserID, str] = None) -> bool:
-        """
-        Abstract method to check if a username is already taken.
-        Optionally excludes a specific user ID from the check.
+        Abstract method to retrieve a notification request by ID from the persistence layer.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def is_email_taken(self, email: Union[Email, str], exclude_user_id: Union[UserID, str] = None) -> bool:
-        """
-        Abstract method to check if an email is already taken.
-        Optionally excludes a specific user ID from the check.
-        """
-        raise NotImplementedError
+    def get_failed_notifications(self, max_retry_count: int = 3) -> list[NotificationRequest]:
+        """Get failed notifications that can be retried."""
+        pass
 
 
-class SqlAlchemyRepository(AbstractRepository):
-    """
-    SQLAlchemy implementation of the AbstractRepository for User entities.
-    """
+class SqlAlchemyNotificationPreferencesRepository(AbstractNotificationPreferencesRepository):
+    """SQLAlchemy implementation for notification preferences."""
 
     def __init__(self, session: Session):
         """
-        Initializes the SQLAlchemy repository with a database session.
+        Initializes the SQLAlchemy notification preferences repository with a database session.
         """
         super().__init__()
         self.session = session
 
-    def _add(self, user: User):
+    def _add(self, preferences: NotificationPreferences):
         """
-        Adds a User entity to the SQLAlchemy session.
+        Adds notification preferences to the SQLAlchemy session.
         """
-        self.session.add(user)
+        self.session.add(preferences)
 
-    def _get(self, userid: Union[UserID, str]) -> User | None:
+    def _get(self, userid: Union[UserID, str]) -> NotificationPreferences | None:
         """
-        Retrieves a User entity by ID from the database using SQLAlchemy.
+        Retrieves notification preferences by user ID from the database using SQLAlchemy.
         """
         userid = userid if isinstance(userid, UserID) else UserID(userid)
-        return self.session.query(User).filter(User.userid == userid).first()
+        return (self.session.query(NotificationPreferences)
+                .filter(NotificationPreferences.userid == userid)
+                .first())
 
-    def _get_by_username(self, username: Union[Username, str]) -> User | None:
-        """
-        Retrieves a User entity by username from the database using SQLAlchemy.
-        """
-        username = username if isinstance(username, Username) else Username(username)
-        return self.session.query(User).filter(User.username == username).first()
 
-    @check_excluded_userid
-    def is_username_taken(self, username: Union[Username, str], exclude_userid: Union[UserID, str] = None) -> Query:
-        """
-        Checks if a username is taken, returning a SQLAlchemy Query object.
-        The decorator `check_excluded_userid` processes this query to return a boolean.
-        """
-        username = username if isinstance(username, Username) else Username(username)
-        return self.session.query(User).filter(User.username == username)
+class SqlAlchemyNotificationRequestRepository(AbstractNotificationRequestRepository):
+    """SQLAlchemy implementation for notification requests."""
 
-    @check_excluded_userid
-    def is_email_taken(self, email: Union[Email, str], exclude_userid: Union[UserID, str] = None) -> Query:
+    def __init__(self, session: Session):
         """
-        Checks if an email is taken, returning a SQLAlchemy Query object.
-        The decorator `check_excluded_userid` processes this query to return a boolean.
+        Initializes the SQLAlchemy notification request repository with a database session.
         """
-        email = email if isinstance(email, Email) else Email(email)
-        return self.session.query(User).filter(User.email == email)
+        super().__init__()
+        self.session = session
+
+    def _add(self, request: NotificationRequest):
+        """
+        Adds a notification request to the SQLAlchemy session.
+        """
+        self.session.add(request)
+
+    def _get(self, notification_id: Union[NotificationID, str]) -> NotificationRequest | None:
+        """
+        Retrieves a notification request by ID from the database using SQLAlchemy.
+        """
+        notification_id = notification_id if isinstance(notification_id, NotificationID) else NotificationID(notification_id)
+        return self.session.query(NotificationRequest).filter(
+            NotificationRequest.notification_id == notification_id
+        ).first()
+
+    def get_failed_notifications(self, max_retry_count: int = 3) -> list[NotificationRequest]:
+        """Get failed notifications that can be retried."""
+        from src.domain.model import NotificationStatus
+        return (
+            self.session.query(NotificationRequest)
+            .filter(
+                NotificationRequest.status == NotificationStatus.FAILED,
+                NotificationRequest.retry_count < max_retry_count
+            )
+            .all()
+        )
+
+    def get_notification_history(self, userid: Union[UserID, str], limit: int) -> list[NotificationRequest]:
+        """
+        Get notification history for a user, ordered by creation date descending.
+
+        Args:
+            userid: The user ID to get history for
+            limit: Maximum number of notifications to return
+
+        Returns:
+            List of NotificationRequest objects
+        """
+        userid = userid if isinstance(userid, UserID) else UserID(userid)
+        return (
+            self.session.query(NotificationRequest)
+            .filter(NotificationRequest.userid == userid)
+            .order_by(NotificationRequest.created_at.desc())
+            .limit(limit)
+            .all()
+        )

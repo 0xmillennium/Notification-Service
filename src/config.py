@@ -51,9 +51,8 @@ def get_rabbitmq_url():
     if not host:
         raise ValueError("RABBITMQ_HOST gerekli!")
 
-    password_part = f":{quote(password)}" if password else ""
-    vhost_part = f"/{quote(vhost)}" if vhost != '/' else vhost
-    return f"amqp://{quote(username)}{password_part}@{host}:{port}{vhost_part}"
+    vhost_part = f"/{vhost}" if vhost != "/" else ""
+    return f"amqp://{quote(username)}:{quote(password)}@{host}:{port}{vhost_part}"
 
 
 def get_sqlite_url():
@@ -101,3 +100,37 @@ def setup_logger():
         print(f"ERROR: Failed to parse YAML logging configuration file: {e}", flush=True)
     except Exception as e:
         print(f"ERROR: An unexpected error occurred while loading logging configuration: {e}", flush=True)
+
+
+# SMTP Configuration Functions
+def get_smtp_host():
+    host = os.getenv('SMTP_HOST')
+    if not host:
+        raise ValueError("SMTP_HOST is required for email notifications")
+    return host
+
+
+def get_smtp_port():
+    return int(os.getenv('SMTP_PORT', '587'))
+
+
+def get_smtp_username():
+    username = os.getenv('SMTP_USERNAME')
+    if not username:
+        raise ValueError("SMTP_USERNAME is required for email notifications")
+    return username
+
+
+def get_smtp_password():
+    password = os.getenv('SMTP_PASSWORD')
+    if not password:
+        raise ValueError("SMTP_PASSWORD is required for email notifications")
+    return password
+
+
+def get_smtp_start_tls():
+    return os.getenv('SMTP_START_TLS', 'true').lower() == 'true'
+
+
+def get_smtp_from_email():
+    return os.getenv('SMTP_FROM_EMAIL', get_smtp_username())
