@@ -576,7 +576,7 @@ This project is licensed under the MIT License. See the LICENSE file for details
 
 ## 👥 Authors
 
-- **Mübarek** - *Initial work* - 0xmillennium@protonmail.com
+- **Mert** - *Initial work* - mertcinkir@gmail.com
 
 ## 🙏 Acknowledgments
 
